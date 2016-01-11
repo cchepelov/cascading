@@ -24,6 +24,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -38,17 +39,26 @@ import java.util.concurrent.TimeUnit;
 public class UnitOfWorkExecutorStrategy implements UnitOfWorkSpawnStrategy
   {
   private ExecutorService executor;
+  private CountDownLatch startLatch;
 
   public List<Future<Throwable>> start( UnitOfWork unitOfWork, int maxConcurrentThreads, Collection<Callable<Throwable>> values ) throws InterruptedException
     {
+    if( executor != null)
+      throw new IllegalStateException("UnitOfWorkExecutorStrategy already started, can't start again");
+
     executor = Executors.newFixedThreadPool( maxConcurrentThreads );
+    startLatch = new CountDownLatch( values.size() );
 
     List<Future<Throwable>> futures = new ArrayList<>();
 
-    for( Callable<Throwable> value : values )
-      futures.add( executor.submit( value ) );
-
-    executor.shutdown(); // don't accept any more work
+    for( final Callable<Throwable> value : values )
+      futures.add( executor.submit( new Callable<Throwable>() {
+        @Override
+        public Throwable call() throws Exception {
+          startLatch.countDown();
+          return value.call();
+        }
+      } ) );
 
     return futures;
     }
@@ -65,6 +75,8 @@ public class UnitOfWorkExecutorStrategy implements UnitOfWorkSpawnStrategy
     if( executor == null )
       return;
 
+    startLatch.await(); /* ensure all tasks have had a chance to start */
+    executor.shutdown();
     executor.awaitTermination( duration, unit );
     }
   }

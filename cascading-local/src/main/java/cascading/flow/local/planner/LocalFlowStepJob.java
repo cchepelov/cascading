@@ -21,7 +21,10 @@
 package cascading.flow.local.planner;
 
 import java.io.IOException;
+import java.lang.reflect.UndeclaredThrowableException;
 import java.util.Properties;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -33,6 +36,8 @@ import cascading.management.state.ClientState;
 import cascading.stats.FlowNodeStats;
 import cascading.stats.FlowStepStats;
 import cascading.stats.local.LocalStepStats;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  *
@@ -70,10 +75,25 @@ public class LocalFlowStepJob extends FlowStepJob<Properties>
   @Override
   protected void internalNonBlockingStart() throws IOException
     {
-    ExecutorService executors = Executors.newFixedThreadPool( 1 );
+    if (future != null)
+      throw new IllegalStateException("LocalFlowStepJob already started, can't start again!");
 
-    future = executors.submit( stackRunner );
+    final ExecutorService executors = Executors.newFixedThreadPool( 1 );
+    final CountDownLatch startLatch = new CountDownLatch(1);
 
+    future = executors.submit( new Callable<Throwable>() {
+      public Throwable call() throws Exception {
+        startLatch.countDown();
+        Throwable result = stackRunner.call();
+        return result;
+      }
+    } );
+
+    try {
+      startLatch.await();
+    } catch (InterruptedException iex) {
+      throw new UndeclaredThrowableException(iex);
+    }
     executors.shutdown();
     }
 

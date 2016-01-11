@@ -20,19 +20,14 @@
 
 package cascading.flow.planner.rule;
 
+import java.lang.reflect.UndeclaredThrowableException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.concurrent.Callable;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorCompletionService;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 
 import cascading.flow.Flow;
 import cascading.flow.FlowDef;
@@ -183,15 +178,23 @@ public class RuleSetExec
 
     RuleRegistrySet.Select select = registrySet.getSelect();
     long totalDuration = registrySet.getPlannerTimeoutSec();
-    long startAll = TimeUnit.MILLISECONDS.toSeconds( System.currentTimeMillis() );
+    final long startAll = TimeUnit.MILLISECONDS.toSeconds( System.currentTimeMillis() );
 
-    for( Callable<RuleResult> callable : callables )
-      futures.add( completionService.submit( callable ) );
+    final CountDownLatch startLatch = new CountDownLatch( callables.size() );
 
-    executor.shutdown();
+    for(final Callable<RuleResult> callable : callables )
+      futures.add( completionService.submit( new Callable<RuleResult>() {
+        @Override
+        public RuleResult call() throws Exception {
+          startLatch.countDown();
+          return callable.call();
+        }
+      } ) );
 
     try
       {
+      startLatch.await();
+      executor.shutdown();
       boolean timedOut = false;
 
       while( !futures.isEmpty() )
